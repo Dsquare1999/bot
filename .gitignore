@@ -1,0 +1,44 @@
+# Virtual environment
+env/
+venv/
+message_env/
+auth_env/
+.env
+.env.dev
+
+# Celery related
+celerybeat-schedule
+celerybeat.pid
+
+# Compiled Python files
+__pycache__/
+*.pyc
+
+# Local development settings
+settings_local.py
+
+# Log files
+*.log
+
+# IDE and editor files
+.idea/
+.vscode/
+
+# Dependency directories
+node_modules/
+
+# Compiled JavaScript
+*.js.map
+
+# Django migrations
+# **/migrations/**
+# !**/migrations
+# !**/migrations/__init__.py
+
+**/media/**
+
+/auth/auth_env/
+
+# DB
+*db.sqlite3
+**/db.sqlite3
