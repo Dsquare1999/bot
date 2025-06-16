@@ -1,6 +1,6 @@
-# eTranslate API Documentation
+# Bot API Documentation
 
-Ce projet contient le Backend et l'API du projet eTranslate développés avec Django Rest Framework, puis dockerisés. Ce README explique les étapes nécessaires pour configurer et déployer l'application en utilisant le Dockerfile et Docker-Compose.
+Ce projet contient le Backend et l'API du projet Bot développés avec Django Rest Framework, puis dockerisés. Ce README explique les étapes nécessaires pour configurer et déployer l'application en utilisant le Dockerfile et Docker-Compose.
 
 ## Prérequis
 
