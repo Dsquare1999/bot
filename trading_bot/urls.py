@@ -9,9 +9,11 @@ from rest_framework.routers import DefaultRouter
 
 from notifications.views import NotificationViewSet
 from users.views import UserViewSet
+from bot_app.views import BotViewSet
 
 router = DefaultRouter()
 router.register(r'users', UserViewSet, basename='users')
+router.register(r'bot', BotViewSet, basename='bot')
 router.register(r'notifications', NotificationViewSet, basename='notifications')
 
 schema_view = get_schema_view(
@@ -38,7 +40,6 @@ urlpatterns = [
     ),
     path("", schema_view.with_ui("redoc", cache_timeout=0), name="schema-redoc"),
     path('admin/', admin.site.urls),
-    path('api/v1/', include('bot_app.urls')),
     path('api/v1/', include(router.urls)),
 
 ]
