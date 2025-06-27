@@ -22,8 +22,8 @@ services:
   #   image: redis:6
   redis:
     image: "redis:alpine"
-    ports:
-      - "6382:6379"
+    # ports:
+      # - "6382:6379"
     volumes:
       - redis_data:/data
 
@@ -69,7 +69,8 @@ services:
     env_file:
       - .env
     environment:
-      - DATABASE_URL=postgres://postgres:postgres@db:5432/trading_bot
+      # - DATABASE_URL=postgres://postgres:postgres@db:5432/trading_bot
+      - DATABASE_URL=postgres://${SQL_USER}:${SQL_PASSWORD}@db:5432/${SQL_DATABASE}
       - DJANGO_SETTINGS_MODULE=trading_bot.settings
       - REDIS_URL=redis://redis:6379
 
@@ -80,9 +81,16 @@ services:
       - .:/app
       - ./Trading_cookies.json:/app/Trading_cookies.json
       - ./app_trading_bot.log:/app/app_trading_bot.log
+    # depends_on:
+    #   - redis
+    #   - web
     depends_on:
-      - redis
-      - web
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     environment:
       - DJANGO_SETTINGS_MODULE=trading_bot.settings
       # - SELENIUM_GRID_URL=http://selenium-hub:4444/wd/hub
