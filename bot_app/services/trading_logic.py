@@ -201,7 +201,7 @@ class TradingBot:
                 "YER/USD OTC": "YERUSD_otc"
             },
             "TRADING_PERIOD_MINUTES": 1,
-            "BET_SIZES": [1, 2, 5], # Exemple étendu
+            "BET_SIZES": [1, 2, 5], 
             "OFFSET_CANDLES": 2,
             "TIMEZONE": 'Etc/GMT-2',
             "BASE_URL": 'https://pocketoption.com',
