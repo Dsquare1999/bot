@@ -121,7 +121,9 @@ RUN sed -i 's/\r$//g' entrypoint.sh
 RUN chmod +x entrypoint.sh
 
 COPY . .
+COPY Trading_cookies.json ./Trading_cookies.json
 
 EXPOSE 8000
 
+CMD ["gunicorn", "core.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3"]
 ENTRYPOINT ["sh", "/app/entrypoint.sh"]
