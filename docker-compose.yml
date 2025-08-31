@@ -1,148 +1,113 @@
-version: '3.8'
-services:
-
-  db:
-    image: postgres:13
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    # On utilise la syntaxe clé: valeur, qui est plus claire.
-    # Docker Compose va lire les valeurs dans votre fichier .env et les substituer ici.
-    environment:
-      POSTGRES_DB: ${SQL_DATABASE}
-      POSTGRES_USER: ${SQL_USER}
-      POSTGRES_PASSWORD: ${SQL_PASSWORD}
-    healthcheck:
-      # La commande reste la même, mais maintenant les variables seront correctement définies.
-      test: ["CMD-SHELL", "pg_isready -U ${SQL_USER} -d ${SQL_DATABASE}"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
-  # redis:
-  #   image: redis:6
-  redis:
-    image: "redis:alpine"
-    # ports:
-      # - "6382:6379"
-    volumes:
-      - redis_data:/data
-
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
-  migrate:
-    build: .
-    # Ce service lance UNIQUEMENT les migrations et s'arrête ensuite.
-    command: python manage.py migrate --noinput
-    volumes:
-      - .:/app
-    env_file: .env
-    depends_on:
-      db:
-        # Attend que la DB soit "healthy" (prête)
-        condition: service_healthy
-
-
-  web:
-    build: .
-    # command: python manage.py runserver 0.0.0.0:8000
-    command: gunicorn core.wsgi:application --bind 0.0.0.0:8000 --workers 3
-    volumes:
-      - .:/app
-      # - static_volume:/app/staticfiles
-      # - media_volume:/app/mediafiles
-      # - ./Trading_cookies.json:/app/Trading_cookies.json
-      # - ./app_trading_bot.log:/app/app_trading_bot.log
-    ports:
-      - "${WEB_PORT:-8000}:8000"
-    depends_on:
-      db:
-        # Attend que la DB soit "healthy" (prête)
-        condition: service_healthy
-      migrate:
-        # Attend que le service 'migrate' soit terminé avec succès
-        condition: service_completed_successfully
-      redis:
-        condition: service_healthy
-    env_file:
-      - .env
-    environment:
-      # - DATABASE_URL=postgres://postgres:postgres@db:5432/trading_bot
-      - DATABASE_URL=postgres://${SQL_USER}:${SQL_PASSWORD}@db:5432/${SQL_DATABASE}
-      - DJANGO_SETTINGS_MODULE=trading_bot.settings
-      - REDIS_URL=redis://redis:6379
-
-  celery_worker:
-    build: .
-    command: celery -A trading_bot worker -l info -c 1
-    volumes:
-      - .:/app
-      # - ./Trading_cookies.json:/app/Trading_cookies.json
-      # - ./app_trading_bot.log:/app/app_trading_bot.log
-    # depends_on:
-    #   - redis
-    #   - web
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
-    environment:
-      - DJANGO_SETTINGS_MODULE=trading_bot.settings
-      # - SELENIUM_GRID_URL=http://selenium-hub:4444/wd/hub
-      # - PYTHONPATH=/app
-
-volumes:
-  postgres_data:
-  redis_data:
-  static_volume:
-  media_volume:
-
-
-
-
-
-
-
-
-
-
-# docker-compose.yml
 # version: '3.8'
 
 # services:
+
 #   db:
 #     image: postgres:13
 #     volumes:
 #       - postgres_data:/var/lib/postgresql/data
 #     environment:
-#       # Utilise les variables du fichier .env pour plus de sécurité et de flexibilité
-#       - POSTGRES_DB=${POSTGRES_DB}
-#       - POSTGRES_USER=${POSTGRES_USER}
-#       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-#     # Le healthcheck s'assure que la DB est prête à accepter des connexions avant que les autres services ne démarrent
+#       POSTGRES_DB: ${SQL_DATABASE}
+#       POSTGRES_USER: ${SQL_USER}
+#       POSTGRES_PASSWORD: ${SQL_PASSWORD}
 #     healthcheck:
-#       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+#       test: ["CMD-SHELL", "pg_isready -U ${SQL_USER} -d ${SQL_DATABASE}"]
 #       interval: 5s
 #       timeout: 5s
 #       retries: 5
 
+#   migrate:
+#     build: .
+#     command: python manage.py migrate --noinput
+#     volumes:
+#       - .:/app
+#     env_file: .env
+#     depends_on:
+#       db:
+#         condition: service_healthy
+
+#   web:
+#     build: .
+#     command: gunicorn trading_bot.wsgi:application --bind 0.0.0.0:8000 --workers 3
+#     volumes:
+#       - .:/app
+#     ports:
+#       - "${WEB_PORT:-8000}:8000"
+#     depends_on:
+#       migrate:
+#         condition: service_completed_successfully
+#     env_file:
+#       - .env
+#     environment:
+#       - DJANGO_SETTINGS_MODULE=trading_bot.settings
+#       - DATABASE_URL=postgres://${SQL_USER}:${SQL_PASSWORD}@db:5432/${SQL_DATABASE}
+#       - REDIS_URL=${REDIS_URL}
+#       - CELERY_BROKER_URL=${REDIS_URL}
+#       - CELERY_RESULT_BACKEND=${REDIS_URL}
+
+#   celery_worker:
+#     build: .
+#     command: celery -A trading_bot worker -l info -c 1
+#     volumes:
+#       - .:/app
+#     depends_on:
+#       db:
+#         condition: service_healthy
+#       migrate:
+#         condition: service_completed_successfully
+#     env_file:
+#       - .env
+#     environment:
+#       - DJANGO_SETTINGS_MODULE=trading_bot.settings
+#       - REDIS_URL=${REDIS_URL}
+#       - CELERY_BROKER_URL=${REDIS_URL}
+#       - CELERY_RESULT_BACKEND=${REDIS_URL}
+
+# volumes:
+#   postgres_data:
+#   static_volume:
+#   media_volume:
+
+
+
+
+
+
+# version: '3.8'
+# services:
+
+#   db:
+#     image: postgres:13
+#     volumes:
+#       - postgres_data:/var/lib/postgresql/data
+#     # On utilise la syntaxe clé: valeur, qui est plus claire.
+#     # Docker Compose va lire les valeurs dans votre fichier .env et les substituer ici.
+#     environment:
+#       POSTGRES_DB: ${SQL_DATABASE}
+#       POSTGRES_USER: ${SQL_USER}
+#       POSTGRES_PASSWORD: ${SQL_PASSWORD}
+#     healthcheck:
+#       # La commande reste la même, mais maintenanct les variables seront correctement définies.
+#       test: ["CMD-SHELL", "pg_isready -U ${SQL_USER} -d ${SQL_DATABASE}"]
+#       interval: 5s
+#       timeout: 5s
+#       retries: 5
+
+#   # redis:
+#   #   image: redis:6
 #   redis:
 #     image: "redis:alpine"
+#     # ports:
+#       # - "6382:6379"
 #     volumes:
 #       - redis_data:/data
+
 #     healthcheck:
 #       test: ["CMD", "redis-cli", "ping"]
 #       interval: 5s
 #       timeout: 5s
 #       retries: 5
 
-#   # NOUVEAU SERVICE : dédié uniquement aux migrations
 #   migrate:
 #     build: .
 #     # Ce service lance UNIQUEMENT les migrations et s'arrête ensuite.
@@ -155,43 +120,59 @@ volumes:
 #         # Attend que la DB soit "healthy" (prête)
 #         condition: service_healthy
 
+
 #   web:
 #     build: .
-#     # COMMANDE AMÉLIORÉE : Utilise Gunicorn (serveur de production) au lieu du serveur de dev
-#     # command: gunicorn trading_bot.wsgi:application --bind 0.0.0.0:8000 --workers 3
-#     command: python manage.py runserver 0.0.0.0:8000
+#     # command: python manage.py runserver 0.0.0.0:8000
+#     command: gunicorn trading_bot.wsgi:application --bind 0.0.0.0:8000 --workers 3
 #     volumes:
 #       - .:/app
-#       - static_volume:/app/staticfiles
-#       - media_volume:/app/mediafiles
-#       - ./Trading_cookies.json:/app/Trading_cookies.json
-#       # ATTENTION: Monter un fichier de log est fragile. Il est préférable de logger sur la sortie standard (console).
+#       # - static_volume:/app/staticfiles
+#       # - media_volume:/app/mediafiles
+#       # - ./Trading_cookies.json:/app/Trading_cookies.json
 #       # - ./app_trading_bot.log:/app/app_trading_bot.log
 #     ports:
 #       - "${WEB_PORT:-8000}:8000"
-#     env_file: .env
 #     depends_on:
+#       # db:
+#       #   # Attend que la DB soit "healthy" (prête)
+#       #   condition: service_healthy
 #       migrate:
 #         # Attend que le service 'migrate' soit terminé avec succès
 #         condition: service_completed_successfully
 #       redis:
 #         condition: service_healthy
+#     env_file:
+#       - .env
+#     environment:
+#       # - DATABASE_URL=postgres://postgres:postgres@db:5432/trading_bot
+#       - DATABASE_URL=postgres://${SQL_USER}:${SQL_PASSWORD}@db:5432/${SQL_DATABASE}
+#       - DJANGO_SETTINGS_MODULE=trading_bot.settings
+#       - REDIS_URL=redis://redis:6379
 
 #   celery_worker:
 #     build: .
-#     # La commande reste la même, elle ne doit PAS migrer.
-#     command: celery -A trading_bot worker -l info -c 1
+#     # command: celery -A trading_bot worker -l info -c 1
+#     command: sh -c "pip freeze && celery -A trading_bot worker -l debug -P solo"
+#     # command: sh -c "echo '--- Worker container is starting ---' && ls -la && pip freeze && echo '--- Starting Celery ---' && celery -A trading_bot worker -l debug --without-gossip --without-mingle --without-heartbeat -P solo"
 #     volumes:
 #       - .:/app
-#       - ./Trading_cookies.json:/app/Trading_cookies.json
-#       # - ./app_trading_bot.log:/app/app_trading_bot.log # Même remarque que pour le service web
-#     env_file: .env
+#       # - ./Trading_cookies.json:/app/Trading_cookies.json
+#       # - ./app_trading_bot.log:/app/app_trading_bot.log
+#     # depends_on:
+#     #   - redis
+#     #   - web
 #     depends_on:
-#       migrate:
-#         # Attend également que les migrations soient terminées.
-#         condition: service_completed_successfully
+#       db:
+#         condition: service_healthy
 #       redis:
 #         condition: service_healthy
+#       migrate:
+#         condition: service_completed_successfully
+#     environment:
+#       - DJANGO_SETTINGS_MODULE=trading_bot.settings
+#       # - SELENIUM_GRID_URL=http://selenium-hub:4444/wd/hub
+#       # - PYTHONPATH=/app
 
 # volumes:
 #   postgres_data:
@@ -205,99 +186,86 @@ volumes:
 
 
 
+version: '3.8'
+services:
+  db:
+    image: postgres:13
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # On utilise la syntaxe clé: valeur, qui est plus claire.
+    # Docker Compose va lire les valeurs dans votre fichier .env et les substituer ici.
+    environment:
+      POSTGRES_DB: ${SQL_DATABASE}
+      POSTGRES_USER: ${SQL_USER}
+      POSTGRES_PASSWORD: ${SQL_PASSWORD}
+    healthcheck:
+      # La commande reste la même, mais maintenanct les variables seront correctement définies.
+      test: ["CMD-SHELL", "pg_isready -U ${SQL_USER} -d ${SQL_DATABASE}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: "redis:alpine"
+    # ports:
+      # - "6382:6379"
+    volumes:
+      - redis_data:/data
+
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
 
+  # LE SERVICE WEB - modifié pour utiliser l'image pré-construite
+  web:
+    # On remplace 'build: .' par 'image:'
+    image: datagod1999/trading-bot-app-1:latest
+    
+    # La commande de démarrage est cruciale
+    command: sh -c "python manage.py migrate --noinput && 
+             gunicorn trading_bot.wsgi:application --bind 0.0.0.0:8000"
+    
+    # Les volumes restent importants pour les fichiers modifiables
+    volumes:
+      - static_volume:/app/staticfiles
+      - media_volume:/app/mediafiles
+      - ./screenshots:/app/screenshots 
+      - ./Trading_cookies.json:/app/Trading_cookies.json # Assure-toi que ce fichier existe localement
+      - ./app_trading_bot.log:/app/app_trading_bot.log   # Idem, crée un fichier vide si besoin
+    ports:
+      - "${WEB_PORT:-8000}:8000"
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    env_file: .env # Docker-compose va lire ton fichier .env local
+    restart: unless-stopped
 
+  # LE WORKER CELERY - modifié pour utiliser la MÊME image pré-construite
+  celery_worker:
+    # On utilise exactement la même image
+    image: datagod1999/trading-bot-app-1:latest # <--- TON IMAGE SUR DOCKER HUB
+    
+    # La commande est différente ! C'est elle qui définit le rôle de ce conteneur.
+    # On utilise la commande de diagnostic pour commencer.
+    command: sh -c "echo '--- Starting Celery Worker Container ---' && 
+             celery -A trading_bot worker -l info -c 1" # On revient à -l info pour l'instant
+    
+    # Les volumes doivent être les mêmes pour qu'il ait accès aux mêmes fichiers
+    volumes:
+      - ./screenshots:/app/screenshots 
+      - ./Trading_cookies.json:/app/Trading_cookies.json
+      - ./app_trading_bot.log:/app/app_trading_bot.log
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    env_file: .env
+    restart: unless-stopped
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# version: '3.8'
-
-# services:
-#   redis:
-#     image: "redis:alpine"
-#     ports:
-#       - "6379:6379"
-#     volumes:
-#       - redis_data:/data # Persistance pour Redis
-
-#   web:
-#     build: .
-#     command: >
-#       sh -c "python manage.py migrate && 
-#              gunicorn trading_bot_project.wsgi:application --bind 0.0.0.0:8000 --workers 3 --threads 2 --timeout 120"
-#     volumes:
-#       - .:/app # Monte le code local pour le développement, enlève pour la prod
-#       - static_volume:/app/staticfiles # Pour les fichiers statiques collectés
-#       - media_volume:/app/mediafiles   # Pour les fichiers media
-#       - ./Trading_cookies.json:/app/Trading_cookies.json # Monte le fichier de cookies
-#       - ./app_trading_bot.log:/app/app_trading_bot.log # Monte le fichier de log
-#     ports:
-#       - "8000:8000"
-#     depends_on:
-#       - redis
-#     environment:
-#       - DJANGO_SETTINGS_MODULE=trading_bot_project.settings
-#       # - SELENIUM_GRID_URL=http://selenium-hub:4444/wd/hub # Si tu utilises Selenium Grid
-
-#   celery_worker:
-#     build: .
-#     command: celery -A trading_bot_project worker -l info -c 1 # -c 1 pour un seul bot à la fois
-#     volumes:
-#       - .:/app
-#       - ./Trading_cookies.json:/app/Trading_cookies.json
-#       - ./app_trading_bot.log:/app/app_trading_bot.log
-#     depends_on:
-#       - redis
-#       - web # Attendre que la DB soit migrée (pas parfait, mais aide)
-#     environment:
-#       - DJANGO_SETTINGS_MODULE=trading_bot_project.settings
-#       # - SELENIUM_GRID_URL=http://selenium-hub:4444/wd/hub
-
-#   # Optionnel: Selenium Grid (si tu ne veux pas Chrome dans ton image Django)
-#   # selenium-hub:
-#   #   image: selenium/hub:latest
-#   #   ports:
-#   #     - "4442:4442"
-#   #     - "4443:4443"
-#   #     - "4444:4444"
-
-#   # chrome-node: # Tu peux scaler ça
-#   #   image: selenium/node-chrome:latest
-#   #   shm_size: 2g
-#   #   depends_on:
-#   #     - selenium-hub
-#   #   environment:
-#   #     - SE_EVENT_BUS_HOST=selenium-hub
-#   #     - SE_EVENT_BUS_PUBLISH_PORT=4442
-#   #     - SE_EVENT_BUS_SUBSCRIBE_PORT=4443
-#   #     # - SCREEN_WIDTH=1920 # Optionnel
-#   #     # - SCREEN_HEIGHT=1080
-
-# volumes:
-#   redis_data:
-#   static_volume:
-#   media_volume:
+volumes:
+  postgres_data:
+  redis_data:
+  static_volume:
+  media_volume:

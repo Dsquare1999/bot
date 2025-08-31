@@ -1,10 +1,14 @@
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from .utils import convert_cookies 
 from django.conf import settings
 import os
 import json
 import logging
+from typing import List, Literal
+from drf_yasg.utils import swagger_auto_schema
+from drf_yasg import openapi
 
 from .tasks import (
     start_trading_bot_task,
@@ -12,13 +16,20 @@ from .tasks import (
     get_bot_status_task,
     get_bot_ohlc_task,
     get_bot_trades_task,
-    update_bot_cookies_task
+    update_bot_cookies_task,
+    debug_hello_task
 )
 
 logger = logging.getLogger(__name__)
 COOKIES_FILE_PATH = os.path.join(settings.BASE_DIR, 'Trading_cookies.json')
 
 class BotViewSet(viewsets.ViewSet):
+    @action(detail=False, methods=["post"], url_path="debug")
+    def debug(self, request):
+        logger.warning("API Reçue: Démarrage de la tâche de débogage")
+        message = "Dieu-Donnee is testing me!"
+        task = debug_hello_task.delay(message=message)
+        return Response({"status": "debug_task_initiated", "task_id": task.id}, status=status.HTTP_202_ACCEPTED)
 
     @action(detail=False, methods=["post"], url_path="start")
     def start(self, request):
@@ -45,6 +56,21 @@ class BotViewSet(viewsets.ViewSet):
             logger.warning("Erreur récupération statut bot : %s", e)
             return Response({"status": "unknown", "is_running": False}, status=status.HTTP_504_GATEWAY_TIMEOUT)
 
+
+    @swagger_auto_schema(
+        method='get',
+        operation_description="Récupère les commandes de l'utilisateur, avec possibilité de filtrer par statut.",
+        manual_parameters=[
+            openapi.Parameter(
+                'cookies',
+                openapi.IN_QUERY,
+                description="Liste des cookies à utiliser pour la commande",
+                type=openapi.TYPE_ARRAY,
+                items=openapi.Items(type=openapi.TYPE_STRING),
+                required=False
+            ),
+        ]
+    )
     @action(detail=False, methods=["get", "post"], url_path="cookies")
     def cookies(self, request):
         logger.debug("API Reçue: Demande de cookies ou mise à jour des cookies")
@@ -60,11 +86,13 @@ class BotViewSet(viewsets.ViewSet):
                 return Response({"error": "Could not read cookies file."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         elif request.method == "POST":
-            new_cookies = request.data.get("cookies")
-            if not isinstance(new_cookies, list):
+            new_cookies = request.query_params.get('cookies')
+            editor_cookies=json.loads(new_cookies) if isinstance(new_cookies, str) else new_cookies
+            selenium_ready=convert_cookies(editor_cookies,source="editor")
+            if not isinstance(selenium_ready, list):
                 return Response({"error": "Expected a list of cookies."}, status=status.HTTP_400_BAD_REQUEST)
 
-            task = update_bot_cookies_task.delay(cookies_json_list=new_cookies, cookies_path=COOKIES_FILE_PATH)
+            task = update_bot_cookies_task.delay(cookies_json_list=editor_cookies, cookies_path=COOKIES_FILE_PATH)
             return Response({"status": "cookies_update_initiated", "task_id": task.id}, status=status.HTTP_202_ACCEPTED)
 
     @action(detail=False, methods=["get"], url_path="logs")
@@ -82,6 +110,21 @@ class BotViewSet(viewsets.ViewSet):
         except Exception as e:
             logger.error("Erreur lecture logs : %s", e)
             return Response({"error": "Could not read log file."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+
+    @action(detail=False, methods=["post"], url_path="clear")
+    def clear(self, request):
+        logger.warning("API Reçue: Effacement des données du bot de trading")
+        log_file_path = getattr(settings, 'LOGGING_FILE_PATH', None)
+        if log_file_path and os.path.exists(log_file_path):
+            try:
+                with open(log_file_path, 'w') as f:
+                    f.write("")  # Vide le fichier de log
+                logger.info("Logs cleared successfully.")
+            except Exception as e:
+                logger.error("Error clearing logs: %s", e)
+                return Response({"error": "Could not clear log file."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({"status": "cleared", "message": "Bot data cleared."}, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=["get"], url_path="ohlc")
     def ohlc(self, request):

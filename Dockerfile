@@ -93,6 +93,9 @@
 
 
 
+
+
+
 FROM python:3.11.7-slim
 
 RUN apt-get update \
@@ -125,5 +128,74 @@ COPY Trading_cookies.json ./Trading_cookies.json
 
 EXPOSE 8000
 
-CMD ["gunicorn", "core.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3"]
+CMD ["gunicorn", "trading_bot.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3"]
 ENTRYPOINT ["sh", "/app/entrypoint.sh"]
+
+
+
+
+
+# FROM python:3.11.7-slim
+
+# # Installer les dépendances système requises
+# RUN apt-get update && apt-get install -y \
+#     wget \
+#     gnupg2 \
+#     ca-certificates \
+#     curl \
+#     fonts-liberation \
+#     libasound2 \
+#     libatk-bridge2.0-0 \
+#     libatk1.0-0 \
+#     libcups2 \
+#     libdbus-1-3 \
+#     libgdk-pixbuf2.0-0 \
+#     libnspr4 \
+#     libnss3 \
+#     libx11-xcb1 \
+#     libxcomposite1 \
+#     libxdamage1 \
+#     libxrandr2 \
+#     xdg-utils \
+#     lsb-release \
+#     dos2unix \
+#     netcat-traditional \
+#     --no-install-recommends
+
+# # Ajouter la clé et le dépôt Chrome
+# RUN wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub \
+#     | gpg --dearmor -o /usr/share/keyrings/google-chrome-keyring.gpg && \
+#     echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome-keyring.gpg] http://dl.google.com/linux/chrome/deb/ stable main" \
+#     > /etc/apt/sources.list.d/google-chrome.list
+
+# # Installer Google Chrome
+# RUN apt-get update && apt-get install -y google-chrome-stable
+
+# # Créer dossier de travail
+# WORKDIR /app
+
+# # Variables d'environnement
+# ENV PYTHONDONTWRITEBYTECODE=1 \
+#     PYTHONUNBUFFERED=1 \
+#     PIP_ROOT_USER_ACTION=ignore
+
+# # Installer pip et dépendances
+# RUN pip install --upgrade pip
+
+# COPY requirements.txt .
+# RUN pip install --no-cache-dir -r requirements.txt
+
+# # Copier et préparer le script d'entrée
+# COPY entrypoint.sh .
+# RUN dos2unix entrypoint.sh && chmod +x entrypoint.sh
+
+# # Copier le reste de l'app
+# COPY . .
+# COPY Trading_cookies.json ./Trading_cookies.json
+
+# # Exposer le port
+# EXPOSE 8000
+
+# # Commande d’exécution
+# CMD ["gunicorn", "trading_bot.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3"]
+# ENTRYPOINT ["sh", "/app/entrypoint.sh"]

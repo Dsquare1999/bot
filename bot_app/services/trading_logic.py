@@ -6,12 +6,17 @@ import pandas as pd
 from datetime import datetime, timedelta
 import pytz
 import logging
+import os
 
+import platform
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 # from selenium.webdriver.chrome.service import Service # Potentiellement nécessaire selon l'install
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
+from selenium.common.exceptions import TimeoutException, ElementClickInterceptedException
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 # from stock_indicators import indicators # Assure-toi que c'est le bon import
 # from stock_indicators.indicators.common.quote import Quote # Vérifie si c'est utilisé
 
@@ -65,7 +70,7 @@ class TradingBot:
         @returns {dict} - La configuration par défaut.
         """
         return {
-            "PERIOD": 5, # Exemple, à ajuster
+            "PERIOD": 0, # Exemple, à ajuster
             "MAX_ACTIONS": 1,
             "COMPANIES": {
                 'Apple OTC': '#AAPL_otc',
@@ -243,6 +248,64 @@ class TradingBot:
         self.driver.maximize_window()
         logger.info("✅ Driver Selenium initialisé.")
 
+    def _clear_and_type_slowly(self, element, value):
+        key_cmd = Keys.COMMAND if platform.system() == "Darwin" else Keys.CONTROL
+        element.send_keys(key_cmd + "a")
+        element.send_keys(Keys.BACKSPACE)
+        time.sleep(0.2)
+        element.send_keys(str(value))
+
+    def _close_any_modal(self, driver, timeout=10, debug=False):
+        wait = WebDriverWait(driver, timeout)
+
+        selectors = [
+            (By.CSS_SELECTOR, '.welcome-bonus-modal'),
+            (By.CLASS_NAME, 'modal-close'),
+            (By.CSS_SELECTOR, 'a.modal-close'),
+            (By.XPATH, "//div[contains(@class, 'modal')]//a[contains(@class, 'close')]"),
+            (By.XPATH, "//button[contains(text(), 'Close')]")
+        ]
+
+        for by, value in selectors:
+            try:
+                # Optionnel : prendre une capture d’écran à chaque tentative
+                if debug:
+                    ts = int(time.time())
+                    screenshot_path = f"/app/screenshots/modal_debug_{ts}.png"
+                    driver.save_screenshot(screenshot_path)
+                    logger.debug(f"📸 Capture enregistrée : {screenshot_path}")
+
+                # Suppression forcée des overlays bloquants
+                try:
+                    overlays = driver.find_elements(By.CLASS_NAME, "ReactModal__Overlay")
+                    for overlay in overlays:
+                        driver.execute_script("arguments[0].remove();", overlay)
+                    logger.info("🧹 Tous les overlays supprimés via JavaScript.")
+                except Exception as e:
+                    logger.warning(f"⚠️ Impossible de supprimer les overlays : {e}")
+
+                # Essayer de cliquer sur les éléments de fermeture
+                element = wait.until(EC.element_to_be_clickable((by, value)))
+                try:
+                    element.click()
+                    logger.info(f"✅ Click effectué sur le sélecteur {by} = {value}")
+                except ElementClickInterceptedException:
+                    driver.execute_script("arguments[0].click();", element)
+                    logger.info(f"✅ Click forcé via JS sur {by} = {value}")
+                except Exception as click_err:
+                    logger.warning(f"⚠️ Erreur lors du clic sur {by} = {value} : {click_err}")
+                
+                return True  # Un modal a été fermé
+            except TimeoutException:
+                logger.debug(f"⏳ Aucun élément détecté pour {by} = {value}")
+            except Exception as e:
+                logger.warning(f"❌ Erreur inattendue pour {by} = {value} : {e}")
+
+            time.sleep(1)  # pause avant d'essayer le suivant
+
+        logger.info("🔍 Aucun pop-up modal pertinent trouvé.")
+        return False
+    
     def _load_cookies_and_navigate(self):
         """
         🍪 Charge les cookies et navigue vers la page de trading.
@@ -282,21 +345,18 @@ class TradingBot:
         self.driver.get(url)
         time.sleep(5) # Attendre que la page se charge bien
 
-        try: # Fermer la pop-up de félicitations si elle apparaît
-            close_congrats = self.driver.find_element(by=By.XPATH, value='/html/body/div[20]/div/div/div/a') # XPATH peut changer
-            close_congrats.click()
-            logger.info("🎉 Pop-up 'Congratulations' fermée.")
-        except Exception:
-            logger.debug("Pas de pop-up 'Congratulations' trouvée.")
-            pass
-    
+        for i in range(2):
+            self._close_any_modal(driver=self.driver, timeout=10, debug=True)
+
+
+
     def _initialize_timestamps(self):
         """
         🕒 Initialise les horodatages de début et de fin de la bougie actuelle.
         """
         self.current_candle_start_time = datetime.now(self.timezone).replace(second=0, microsecond=0)
         if self.period_seconds > 0 and self.period_seconds < 60 : # Pour les périodes en secondes
-             # Aligner sur le multiple de self.period_seconds le plus proche
+            # Aligner sur le multiple de self.period_seconds le plus proche
             current_seconds = self.current_candle_start_time.second
             seconds_to_subtract = current_seconds % self.period_seconds
             self.current_candle_start_time = self.current_candle_start_time - timedelta(seconds=seconds_to_subtract)
@@ -304,74 +364,87 @@ class TradingBot:
 
         else: # Pour les périodes en minutes
             self.current_candle_end_time = self.current_candle_start_time + timedelta(minutes=self.trading_period_minutes)
-        logger.info("🕯️ Bougie initiale: START=%s, END=%s (Période: %s min ou %s sec)", 
-                    self.current_candle_start_time.strftime('%Y-%m-%d %H:%M:%S'), 
+        logger.info("🕯️ Bougie initiale: START=%s, END=%s (Période: %s min ou %s sec)",
+                    self.current_candle_start_time.strftime('%Y-%m-%d %H:%M:%S'),
                     self.current_candle_end_time.strftime('%Y-%m-%d %H:%M:%S'),
                     self.trading_period_minutes,
                     self.period_seconds)
 
 
     def _set_position_amount(self, amount):
-        """
-        💰 Définit le montant de la mise.
-        @param {str|int} amount - Le montant à miser.
-        """
         try:
-            logger.debug("💸 Tentative de définition du montant de la mise à : %s", amount)
-            # Nouvelle méthode, plus fiable si le clavier virtuel n'est pas toujours là
-            bet_input = self.driver.find_element(By.XPATH,"/html/body/div[4]/div[2]/div[3]/div/div/div/div[1]/div/div[5]/div/div/div[2]/div/div[1]/div[2]/div[2]/div[1]/div/input")
-            bet_input.click() # Clique pour activer
-            time.sleep(0.2)
-            bet_input.send_keys(Keys.CONTROL + "a")
-            bet_input.send_keys(Keys.BACKSPACE)
-            time.sleep(0.1)
-            # Simuler la frappe humaine pour le montant
-            for char_amount in str(amount):
-                bet_input.send_keys(char_amount)
-                time.sleep(random.uniform(0.05, 0.15))
-            logger.info("💵 Montant de la mise défini à : %s", amount)
-            # Optionnel: cliquer ailleurs pour fermer le clavier si besoin
-            # self.driver.find_element(By.TAG_NAME, "body").click() 
+            # XPATH basé sur le bloc 'Amount'
+            amount_input_xpath = "//div[contains(@class, 'block--bet-amount')]//input[@type='text']"
+            timeout_seconds = 10
+            logger.debug("💸 Attente de la visibilité de l'input de mise (Timeout: %s sec)...", timeout_seconds)
+
+            wait = WebDriverWait(self.driver, timeout_seconds)
+            logger.debug("💸 Attente 2 de l'input de mise...")
+
+            # self._close_any_modal(driver=self.driver, timeout=5, debug=False)
+
+            # time.sleep(1)
+            logger.debug("Closing of any modal bypassed.")
+
+            # Attente de l’input présent et cliquable
+            wait.until(EC.presence_of_element_located((By.XPATH, amount_input_xpath)))
+            bet_input = wait.until(EC.element_to_be_clickable((By.XPATH, amount_input_xpath)))
+
+            logger.info("✅ Input trouvé, mise à jour du montant : %s", amount)
+            self._clear_and_type_slowly(bet_input, amount)
+
+            final_value = bet_input.get_attribute("value")
+            logger.info("🔎 Valeur finale dans l'input : %s", final_value)
+
         except Exception as e:
-            logger.error("❌ Erreur lors de la définition du montant de la mise: %s", e)
-            # self.save_debug_screenshot("set_amount_error") # Sauvegarder screenshot pour debug
+            logger.error("❌ Erreur lors de la définition du montant : %s", str(e))
+            raise
+
+
 
     def _get_current_yield_and_select_best(self):
         """
-        📈 Vérifie le rendement actuel et sélectionne la meilleure devise si le rendement n'est pas de +92%.
-        @returns {bool} - True si le rendement est OK ou si une meilleure devise a été sélectionnée, False sinon.
+            📈 Vérifie le rendement actuel et sélectionne la meilleure devise si le rendement n'est pas de +92%.
+            @returns {bool} - True si le rendement est OK ou si une meilleure devise a été sélectionnée, False sinon.
         """
         try:
             logger.debug("🔍 Vérification du rendement actuel...")
-            # current_label_element = self.driver.find_element(By.XPATH, "/html/body/div[4]/div[2]/div[3]/div/div/div/div[1]/div/div[1]/div[1]/div[1]/div/a/div/span")
-            # current_currency_name = current_label_element.text
-            # Attention, le XPATH pour le % peut changer s'il y a des popups ou des changements de layout
-            current_percent_element = self.driver.find_element(By.XPATH, "/html/body/div[4]/div[2]/div[3]/div/div/div/div[1]/div/div[5]/div/div/div[2]/div/div[2]/div[1]/div[2]/div/div/div[1]")
-            current_percent_text = current_percent_element.text
+
+            current_percent_element = WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.XPATH, "//div[contains(@class, 'block--payout')]//div[contains(@class, 'value__val-start')]")))
+            current_percent_text = current_percent_element.text.strip()
+            
             logger.info("📊 Rendement actuel affiché : %s", current_percent_text)
 
-            if current_percent_text != "+92%": # Le rendement cible est configurable
+            if current_percent_text != "+92%": 
                 logger.warning("📉 Rendement (%s) non optimal. Tentative de changement de devise.", current_percent_text)
                 self._reset_trade_state() # Réinitialiser l'état de trading
-                
-                currency_div = self.driver.find_element(By.XPATH, "/html/body/div[4]/div[2]/div[3]/div/div/div/div[1]/div/div[1]/div[1]/div[1]/div") # Bouton pour ouvrir la liste des devises
-                currency_div.click()
-                time.sleep(1) # Attendre l'ouverture du modal
 
-                currency_nav_tab = self.driver.find_element(By.XPATH, "/html/body/div[9]/div/div/div/div[1]/div/div[1]/a[1]") # Onglet "Currencies"
-                currency_nav_tab.click()
+                # Clique sur le bloc de devise
+                currency_div = self.driver.find_element(By.CSS_SELECTOR, ".currencies-block__in")
+                currency_div.click()
+                logger.info("🔄 Bloc de devise cliqué pour ouvrir la liste des devises.")
+                time.sleep(1)
+
+                # Clique sur l’onglet "Currencies"
+                currency_tab = self.driver.find_element(By.CSS_SELECTOR, ".assets-block__nav-item--currency")
+                currency_tab.click()
+                logger.info("🔄 Onglet 'Currencies' cliqué pour afficher la liste des devises.")
                 time.sleep(1)
 
                 # Recherche de la première devise avec +92%
                 # Les XPATHs ici sont très fragiles et dépendent de la structure de la page.
                 # Il est préférable de boucler sur les éléments de la liste.
                 try:
-                    currency_list_items = self.driver.find_elements(By.XPATH, "/html/body/div[9]/div/div/div/div[2]/div[2]/div/div/div[1]/ul/li")
+                    logger.info("🔍 Recherche de la meilleure devise avec +92%% de rendement...")
+                    # currency_list_items = self.driver.find_elements(By.XPATH, "/html/body/div[9]/div/div/div/div[2]/div[2]/div/div/div[1]/ul/li")
+                    currency_list = WebDriverWait(self.driver, 10).until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, "ul.alist-currency > li.alist__item")))
                     found_best_currency = False
-                    for item_li in currency_list_items:
+                    for item_li in currency_list:
                         try:
+                            logger.debug("🔎 Traitement de l'item de devise: %s", item_li.text)
                             label_element = item_li.find_element(By.XPATH, ".//a/span[3]") # Nom de la devise
                             yield_element = item_li.find_element(By.XPATH, ".//a/span[4]/span") # Rendement
+                            logger.debug("Devise: %s, Rendement: %s", label_element.text, yield_element.text)
 
                             if yield_element.text == "+92%":
                                 currency_name_on_site = label_element.text
@@ -381,10 +454,14 @@ class TradingBot:
                                     item_li.click() # Sélectionner cette devise
                                     time.sleep(1)
                                     # Fermer le modal de sélection de devise (souvent avec Echap ou un bouton croix)
-                                    self.driver.find_element(By.XPATH, "/html/body/div[9]/div/div/div/div[2]/div[1]/div[1]/input").send_keys(Keys.ESCAPE) # Champ de recherche, puis Echap
+                                    # self.driver.find_element(By.XPATH, "/html/body/div[9]/div/div/div/div[2]/div[1]/div[1]/input").send_keys(Keys.ESCAPE) # Champ de recherche, puis Echap
+                                    search_input = WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, "input.search__field")))
+                                    search_input.send_keys(Keys.ESCAPE) # Fermer le champ de recherche
+                                    logger.info("🔄 Modal de sélection de devise fermé.")
                                     found_best_currency = True
                                     self.is_currency_changing = True # Indiquer qu'un changement a eu lieu
                                     self.last_currency_change_time = datetime.now()
+                                    logger.info("🔄 Devise active mise à jour: %s", self.current_active_currency)
                                     break 
                                 else:
                                     logger.warning("⚠️ Devise %s avec +92%% non trouvée dans currencies_map.", currency_name_on_site)
@@ -396,8 +473,12 @@ class TradingBot:
                         logger.error("❌ Aucune devise avec +92%% de rendement trouvée ou mappée.")
                         # Fermer le modal quand même
                         try:
-                            self.driver.find_element(By.XPATH, "/html/body/div[9]/div/div/div/div[2]/div[1]/div[1]/input").send_keys(Keys.ESCAPE)
-                        except: pass
+                            # self.driver.find_element(By.XPATH, "/html/body/div[9]/div/div/div/div[2]/div[1]/div[1]/input").send_keys(Keys.ESCAPE)
+                            search_input = WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, "input.search__field")))
+                            search_input.send_keys(Keys.ESCAPE)
+                            logger.info("Modal de sélection de devise fermé.")
+                        except: 
+                            logger.error("❌ Impossible de fermer le modal de sélection de devise.")
                         return False
                 except Exception as e_list:
                     logger.error("❌ Erreur lors de la recherche de la meilleure devise: %s", e_list)
@@ -405,9 +486,15 @@ class TradingBot:
                     return False
             else: # Rendement déjà à +92%
                 # Vérifier si la devise actuelle est correctement enregistrée
-                current_label_element = self.driver.find_element(By.XPATH, "/html/body/div[4]/div[2]/div[3]/div/div/div/div[1]/div/div[1]/div[1]/div[1]/div/a/div/span")
+                # logger.info("✅ Rendement actuel est déjà optimal: %s", current_percent_text)
+                # current_label_element = self.driver.find_element(By.XPATH, "/html/body/div[4]/div[2]/div[3]/div/div/div/div[1]/div/div[1]/div[1]/div[1]/div/a/div/span")
+                # current_currency_name_on_site = current_label_element.text
+
+                current_label_element = self.driver.find_element(By.CSS_SELECTOR, "span.current-symbol.current-symbol_cropped")
                 current_currency_name_on_site = current_label_element.text
+                logger.info("✅ Rendement actuel est déjà optimal: %s", current_currency_name_on_site)
                 if current_currency_name_on_site in self.currencies_map:
+                    logger.info("🔍 Devise actuelle sur le site: %s", current_currency_name_on_site)
                     mapped_code = self.currencies_map[current_currency_name_on_site]
                     if self.current_active_currency != mapped_code:
                         logger.info("🔄 Synchronisation de la devise active: %s -> %s", self.current_active_currency, mapped_code)
@@ -454,71 +541,46 @@ class TradingBot:
             max_retries = 3
             for attempt in range(max_retries):
                 try:
-                    # Heures à zéro
                     hour_input = self.driver.find_element(By.CSS_SELECTOR, "#modal-root > div > div > div > div.trading-panel-modal__in > div:nth-child(1) > div > input")
                     hour_input.click()
                     hour_input.send_keys(Keys.CONTROL + "a")
-                    hour_input.send_keys(Keys.BACKSPACE) # Efface
-                    hour_input.send_keys("0") # Met à 0 heure
-                    time.sleep(0.1)
+                    hour_input.send_keys(Keys.BACKSPACE)
+                    hour_input.send_keys(Keys.BACKSPACE)
+                
+                    minute_plus=self.driver.find_element(By.CSS_SELECTOR,"#modal-root > div > div > div > div.trading-panel-modal__in > div:nth-child(2) > a.btn-plus")
+                    for i in range(minutes):
+                        minute_plus.click()
                     
-                    # Mettre les minutes
-                    # D'abord, s'assurer que c'est à 0 ou 1, puis cliquer sur + ou -
-                    # Il est plus simple de viser directement l'input des minutes
-                    minute_input = self.driver.find_element(By.CSS_SELECTOR, "#modal-root > div > div > div > div.trading-panel-modal__in > div:nth-child(2) > div > input")
-                    minute_input.click()
-                    minute_input.send_keys(Keys.CONTROL + "a")
-                    minute_input.send_keys(Keys.BACKSPACE)
-                    minute_input.send_keys(str(minutes)) # Met les minutes voulues
-                    time.sleep(0.1)
+                    seconde_input = self.driver.find_element(By.CSS_SELECTOR, "#modal-root > div > div > div > div.trading-panel-modal__in > div:nth-child(3) > div > input")
+                    seconde_input.click()  
+                    seconde_input.send_keys(Keys.CONTROL + "a")  # sélectionne tout
+                    seconde_input.send_keys("00")               # tape la nouvelle valeur
+                    auto_open=self.driver.find_element(By.XPATH,'//*[@id="modal-root"]/div/div/div/div[2]/div/label')
 
-                    # Secondes à zéro
-                    second_input = self.driver.find_element(By.CSS_SELECTOR, "#modal-root > div > div > div > div.trading-panel-modal__in > div:nth-child(3) > div > input")
-                    second_input.click()
-                    second_input.send_keys(Keys.CONTROL + "a")
-                    second_input.send_keys("00")
-                    time.sleep(0.1)
-
-                    # Gérer "Auto Rollover" / "Ouverture automatique"
-                    # ... (ton code pour auto_open)
-                    # Il faut une méthode plus robuste pour vérifier l'état du switch
-                    auto_open_label = self.driver.find_element(By.XPATH,'//*[@id="modal-root"]/div/div/div/div[2]/div/label')
-                    class_attr = auto_open_label.get_attribute('class')
-                    if 'is-checked' not in class_attr: # Si ce n'est pas coché
-                         auto_switch_thumb = self.driver.find_element(By.CSS_SELECTOR,'#modal-root > div > div > div > div.trading-panel-modal__dops.dops.dops-with-timeframes > div > label > div.mdl-switch__thumb > span')
-                         auto_switch_thumb.click()
-                         time.sleep(0.2)
-                         # Sélectionner le timeframe (ex: M1)
-                         # Ce sélecteur est fragile, il faut s'assurer que 'opened' est bien là
-                         # Il faut s'assurer que le timeframe sélectionné correspond à self.trading_period_minutes
-                         # Exemple pour M1:
-                         # time_frame_to_select_xpath = f"//div[contains(@class, 'dops__timeframes')]//div[contains(text(), 'M{self.trading_period_minutes}')]"
-                         # self.driver.find_element(By.XPATH, time_frame_to_select_xpath).click()
-                         # Pour l'instant, on va simplifier en supposant que M1 est le 2e enfant :
-                         select_time = self.driver.find_element(By.CSS_SELECTOR,'#modal-root > div > div > div > div.trading-panel-modal__dops.dops.dops-with-timeframes.opened > div.dops__timeframes > div:nth-child(2)') # M1
-                         select_time.click()
-                         time.sleep(0.2)
-
-                    # Cliquer sur le bouton "Time" (qui est en fait le champ pour fermer le modal)
-                    # Le XPATH que tu avais /html/body/div[4]/... correspond au bouton sur la page principale, pas dans le modal.
-                    # Il faut trouver le bouton de confirmation ou simplement simuler Echap.
-                    # Pour l'instant, on suppose que la modification des champs suffit et le modal se ferme ou que l'action suivante le ferme.
-                    # Ou, on peut essayer de cliquer sur le champ d'heure pour appliquer.
-                    hour_input.click() # Peut aider à valider/fermer
+                    class_attr=auto_open.get_attribute('class')
+                    if 'is-checked' not in class_attr:
+                        auto_incl=self.driver.find_element(By.CSS_SELECTOR,'#modal-root > div > div > div > div.trading-panel-modal__dops.dops.dops-with-timeframes > div > label > div.mdl-switch__thumb > span')
+                        auto_incl.click()
+                        select_time=self.driver.find_element(By.CSS_SELECTOR,'#modal-root > div > div > div > div.trading-panel-modal__dops.dops.dops-with-timeframes.opened > div.dops__timeframes > div:nth-child(2)')
+                        select_time.click()
+                    
+                    time_input.click()
                     logger.info("✅ Délai d'expiration configuré.")
                     break # Sortir de la boucle retry
                 except Exception as e_modal:
-                    logger.warning("🟡 Tentative %s/%s: Erreur lors de la configuration du délai: %s. Réessai...", attempt + 1, max_retries, e_modal)
-                    if attempt + 1 == max_retries:
-                        logger.error("❌ Échec final de la configuration du délai d'expiration.")
-                        # self.save_debug_screenshot("set_timeout_error")
-                        raise
-                    time.sleep(1) # Attendre avant de réessayer
+                    # logger.warning("Problème lors de la configuration du délai d'expiration: %s", e_modal)
+                    # time_input = self.driver.find_element(By.XPATH, "/html/body/div[4]/div[2]/div[3]/div/div/div/div[1]/div/div[5]/div/div/div[2]/div/div[1]/div[1]/div[2]/div[1]")
+                    time_input = WebDriverWait(self.driver, 10).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "div.control__value.value.value--several-items")))
+                    time_input.click()
+
+
             
             # S'assurer que le modal est fermé, par exemple en cliquant sur le body
             # self.driver.find_element(By.TAG_NAME, "body").click()
             # Ou en envoyant Echap au champ principal de mise
-            bet_input_main = self.driver.find_element(By.XPATH,"/html/body/div[4]/div[2]/div[3]/div/div/div/div[1]/div/div[5]/div/div/div[2]/div/div[1]/div[2]/div[2]/div[1]/div/input")
+            # bet_input_main = self.driver.find_element(By.XPATH,"/html/body/div[4]/div[2]/div[3]/div/div/div/div[1]/div/div[5]/div/div/div[2]/div/div[1]/div[2]/div[2]/div[1]/div/input")
+            # bet_input_main.send_keys(Keys.ESCAPE)
+            bet_input_main = self.driver.find_element(By.CSS_SELECTOR, "div.block--bet-amount input[type='text']")
             bet_input_main.send_keys(Keys.ESCAPE)
 
 
@@ -527,25 +589,15 @@ class TradingBot:
             # self.save_debug_screenshot("critical_timeout_error")
             raise
 
-    def _timestamp_to_human_readable(self, timestamp, timezone_offset_hours=None):
-        """
-        🕰️ Convertit un timestamp (potentiellement en ms) en une chaîne de date lisible, avec gestion du timezone de la classe.
-        @param {int|float} timestamp - Le timestamp.
-        @param {int} timezone_offset_hours - Optionnel, si on veut surcharger le timezone de la classe.
-        @returns {datetime} - L'objet datetime.
-        """
-        if timestamp > 1e12: # Si en millisecondes
+    def _timestamp_to_human_readable(self, timestamp, timezone_offset=0):
+        if timestamp > 1e12:
             timestamp /= 1000
-        
-        dt_utc = datetime.utcfromtimestamp(timestamp)
-        
-        if timezone_offset_hours is not None:
-            # Appliquer un offset manuel si fourni (moins robuste que pytz)
-            return dt_utc + timedelta(hours=timezone_offset_hours)
-        else:
-            # Convertir en utilisant le timezone de la classe
-            dt_aware_utc = pytz.utc.localize(dt_utc)
-            return dt_aware_utc.astimezone(self.timezone)
+
+        dt = datetime.utcfromtimestamp(timestamp)
+        dt = dt.replace(hour=dt.hour + timezone_offset)
+        local_dt = dt.astimezone(self.timezone)
+        return local_dt
+        # return dt.strftime('%Y-%m-%d %H:%M:%S')
 
     def get_current_balance(self):
         """
@@ -568,27 +620,30 @@ class TradingBot:
         @param {str} direction_color - "green" (achat/CALL) ou "red" (vente/PUT).
         """
         try:
-            xpath_selector = ""
             if direction_color == 'green':
-                xpath_selector = "/html/body/div[4]/div[2]/div[3]/div/div/div/div[1]/div/div[5]/div/div/div[2]/div/div[2]/div[2]/div[1]/a" # Bouton CALL/UP
+                selector = "div.button-call-wrap a.btn-call"
                 logger.info("⬆️ Placement d'un ordre CALL (green)...")
             elif direction_color == 'red':
-                xpath_selector = "/html/body/div[4]/div[2]/div[3]/div/div/div/div[1]/div/div[5]/div/div/div[2]/div/div[2]/div[2]/div[2]/a" # Bouton PUT/DOWN
+                selector = "div.button-put-wrap a.btn-put"
                 logger.info("⬇️ Placement d'un ordre PUT (red)...")
             else:
                 logger.error("❌ Couleur de direction invalide pour _take_position: %s", direction_color)
                 return
 
-            position_button = self.driver.find_element(By.XPATH, xpath_selector)
+            # Attendre que le bouton soit cliquable (meilleure stabilité)
+            position_button = WebDriverWait(self.driver, 10).until(EC.element_to_be_clickable((By.CSS_SELECTOR, selector)))
             position_button.click()
-            # Log l'action
-            self.actions_log[datetime.now()] = {"direction": direction_color, "amount": self.active_bet_details['amount'] if self.active_bet_details else "N/A"}
+
+            self.actions_log[datetime.now()] = {
+                "direction": direction_color,
+                "amount": self.active_bet_details['amount'] if self.active_bet_details else "N/A"
+            }
+
             logger.info("✅ Ordre %s placé.", direction_color.upper())
 
         except Exception as e:
             logger.error("❌ Erreur lors de la prise de position (%s): %s", direction_color, e)
             # self.save_debug_screenshot(f"take_position_{direction_color}_error")
-            # Il faudrait gérer ici si le trade n'a pas pu être placé (ex: boutons désactivés)
 
     def _apply_trade_logic(self, last_formed_candle_color):
         """
@@ -725,7 +780,7 @@ class TradingBot:
             return
 
         if not self.current_active_currency:
-            # logger.debug("Pas de devise active sélectionnée, en attente de _get_current_yield_and_select_best.")
+            logger.debug("Pas de devise active sélectionnée, en attente de _get_current_yield_and_select_best.")
             # Tentative de sélection pour démarrer
             if not self._get_current_yield_and_select_best():
                 logger.warning("Impossible de sélectionner une devise, le traitement WebSocket est en pause.")
@@ -738,34 +793,43 @@ class TradingBot:
 
         try:
             logs = self.driver.get_log('performance')
+            logger.debug("Logs de performance:")
         except Exception as e:
             logger.error("❌ Erreur lors de la récupération des logs de performance: %s", e)
             return
 
         for wsData_entry in logs:
             try:
+                logger.debug("Message WebSocket reçu")
                 message_data = json.loads(wsData_entry['message'])['message']
                 response_data = message_data.get('params', {}).get('response', {})
 
                 if response_data.get('opcode', 0) == 2: # Message binaire
+                    logger.debug("Opcode 0 logging message")
                     payload_str_b64 = response_data.get('payloadData')
                     if not payload_str_b64:
                         continue
 
+                    logger.debug("playload bytes message")
                     payload_bytes = base64.b64decode(payload_str_b64)
                     
                     # Tenter de décoder en UTF-8. Si ça échoue, c'est peut-être un autre format ou compressé.
                     # PocketOption utilise souvent du JSON simple non compressé pour les ticks.
                     try:
                         payload_str = payload_bytes.decode('utf-8')
+                        logger.debug("playload decoding byte messages")
+
                     except UnicodeDecodeError:
-                        # logger.debug("Données non UTF-8, potentiellement compressées ou autre format. Ignoré.")
+                        logger.debug("Unicode decode error")
                         continue # Ignorer les messages non décodables pour l'instant
 
                     try:
                         data = json.loads(payload_str)
+                        logger.debug("Datalog payload string")
+
                     except json.JSONDecodeError:
                         # logger.debug("Impossible de décoder le payload JSON: %s", payload_str[:100]) # Log début du payload
+                        logger.debug("Impossible to decode payload JSON")
                         continue
                     
                     # Filtrer pour les données de prix de la devise active
@@ -773,6 +837,8 @@ class TradingBot:
                     if isinstance(data, list) and len(data) > 0 and \
                        isinstance(data[0], list) and len(data[0]) == 3 and \
                        isinstance(data[0][0], str) and data[0][0] == self.current_active_currency:
+                        
+                        logger.debug("Filter money price data ")
                         
                         timestamp_ms = data[0][1]
                         price = data[0][2]
@@ -784,26 +850,37 @@ class TradingBot:
                             "Price": [price]
                         })
                         self.price_history_stream = pd.concat([self.price_history_stream, new_price_tick], ignore_index=True)
-                        # logger.debug("Tick reçu pour %s: %s @ %s", self.current_active_currency, price, dt_object.strftime('%H:%M:%S.%f'))
+                        logger.debug("Tick reçu 1 - > - - - ")
 
                         # Construction des bougies OHLC
                         # Assurer que price_history_stream a 'Time' comme index pour le resample
                         if not self.price_history_stream.empty and 'Time' in self.price_history_stream.columns:
+                            logger.debug("Tick reçu 2 - > - - - ")
+
                             df_for_ohlc = self.price_history_stream.set_index('Time')
+
+                            logger.info("DEBUG df_for_ohlc", df_for_ohlc)
                             
                             # Vérifier si la bougie actuelle est terminée
                             # current_time_aware = datetime.now(self.timezone)
                             # Utiliser le temps du dernier tick reçu pour être plus précis
                             current_tick_time_aware = dt_object 
+                            logger.debug("DEBUG current_candle_end_time %s", self.current_candle_end_time)
+                            logger.debug("DEBUG current_tick_time_aware %s", current_tick_time_aware)
 
+                            # if self.current_candle_end_time and pd.to_datetime(current_tick_time_aware) >= self.current_candle_end_time:
                             if self.current_candle_end_time and current_tick_time_aware >= self.current_candle_end_time:
                                 logger.info("🕯️ Fermeture de la bougie: %s à %s", 
                                             self.current_candle_start_time.strftime('%H:%M:%S'), 
                                             self.current_candle_end_time.strftime('%H:%M:%S'))
-                                
+
+                                logger.debug("Bougie terminee")
+
                                 # Sélectionner les ticks pour la bougie qui vient de se terminer
                                 candle_ticks = df_for_ohlc[(df_for_ohlc.index >= self.current_candle_start_time) & 
                                                            (df_for_ohlc.index < self.current_candle_end_time)]
+                                
+                                logger.debug("Candle ticks:\n%s", candle_ticks)
 
                                 if not candle_ticks.empty:
                                     open_price = candle_ticks['Price'].iloc[0]
@@ -835,8 +912,10 @@ class TradingBot:
                                 # Mettre à jour pour la prochaine bougie
                                 self.current_candle_start_time = self.current_candle_end_time
                                 if self.period_seconds > 0 and self.period_seconds < 60:
+                                    logger.debug("Tick reçu 3 - > - - - ")
                                     self.current_candle_end_time = self.current_candle_start_time + timedelta(seconds=self.period_seconds)
                                 else:
+                                    logger.debug("Tick reçu 4 - > - - - ")
                                     self.current_candle_end_time = self.current_candle_start_time + timedelta(minutes=self.trading_period_minutes)
                                 logger.debug("Prochaine bougie attendue: %s à %s", self.current_candle_start_time.strftime('%H:%M:%S'), self.current_candle_end_time.strftime('%H:%M:%S'))
                                 
@@ -850,7 +929,8 @@ class TradingBot:
 
             except Exception as e_msg:
                 # logger.debug("Erreur mineure lors du traitement d'un message WebSocket: %s", e_msg)
-                pass # Beaucoup de messages ne sont pas pertinents
+                logger.error("Error Tick reçu - > - - - %s", e_msg)
+                # pass # Beaucoup de messages ne sont pas pertinents
 
     def start(self):
         """
@@ -873,16 +953,18 @@ class TradingBot:
                 self.stop()
                 return
             
-            self._set_trade_timeout(minutes=self.trading_period_minutes) # Configure l'expiration
+            self._set_trade_timeout(minutes=self.trading_period_minutes)
 
             logger.info("✅ Bot démarré et prêt à trader sur %s.", self.current_active_currency)
+
+            self.save_debug_screenshot("timeout_error_set_amount") # On capture la preuve !
 
             # Boucle principale
             while self.is_running:
                 self._process_websocket_data()
                 # Petite pause pour ne pas surcharger le CPU avec get_log,
                 # et pour laisser le temps aux messages WS d'arriver.
-                time.sleep(0.1) # Très court, car les ticks sont rapides. À ajuster.
+                # time.sleep(0.1) # Très court, car les ticks sont rapides. À ajuster.
         
         except Exception as e:
             logger.critical("💥 Erreur critique lors de l'exécution du bot: %s", e, exc_info=True)
@@ -912,8 +994,8 @@ class TradingBot:
         """
         logger.info("📝 Mise à jour du fichier de cookies...")
         try:
-            with open(self.cookies_path, "w") as fichier:
-                json.dump(new_cookies_json_list, fichier, indent=4)
+            with open(self.cookies_path, "w", encoding="utf-8") as fichier:
+                json.dump(new_cookies_json_list, fichier, ensure_ascii=False, indent=4)
             logger.info("✅ Fichier de cookies mis à jour : %s", self.cookies_path)
             # Si le bot tourne, il faudrait le redémarrer pour prendre en compte les nouveaux cookies.
             if self.is_running:
@@ -955,19 +1037,48 @@ class TradingBot:
             return []
         return self.trade_history_log[-last_n:]
         
+    # def save_debug_screenshot(self, filename_prefix="debug"):
+    #     """
+    #     📸 Sauvegarde une capture d'écran pour le débogage.
+    #     """
+    #     if self.driver:
+    #         try:
+    #             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    #             filename = f"{filename_prefix}_{timestamp}.png"
+    #             # S'assurer que le répertoire de screenshots existe
+    #             # import os; os.makedirs("screenshots", exist_ok=True) # Si on veut un sous-dossier
+    #             self.driver.save_screenshot(filename)
+    #             logger.info("📸 Screenshot de débogage sauvegardé: %s", filename)
+    #         except Exception as e:
+    #             logger.error("❌ Impossible de sauvegarder le screenshot: %s", e)
+
+
+
     def save_debug_screenshot(self, filename_prefix="debug"):
         """
         📸 Sauvegarde une capture d'écran pour le débogage.
         """
         if self.driver:
             try:
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = f"{filename_prefix}_{timestamp}.png"
-                # S'assurer que le répertoire de screenshots existe
-                # import os; os.makedirs("screenshots", exist_ok=True) # Si on veut un sous-dossier
-                self.driver.save_screenshot(filename)
-                logger.info("📸 Screenshot de débogage sauvegardé: %s", filename)
-            except Exception as e:
-                logger.error("❌ Impossible de sauvegarder le screenshot: %s", e)
+                # S'assurer que le répertoire existe
+                screenshots_dir = "/app/screenshots"
+                if not os.path.exists(screenshots_dir):
+                    os.makedirs(screenshots_dir)
 
-# --- FIN DE LA CLASSE TradingBot ---
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"{screenshots_dir}/{filename_prefix}_{timestamp}.png"
+                
+                # Sauvegarde du screenshot
+                self.driver.save_screenshot(filename)
+                
+                # Log du HTML de la page, c'est aussi un indice précieux !
+                page_source_filename = f"{screenshots_dir}/{filename_prefix}_{timestamp}.html"
+                with open(page_source_filename, "w", encoding="utf-8") as f:
+                    f.write(self.driver.page_source)
+
+                logger.info("📸 Preuves sauvegardées: %s et %s", filename, page_source_filename)
+                
+            except Exception as e:
+                logger.error("❌ Impossible de sauvegarder les preuves de débogage: %s", e)
+
+    # --- FIN DE LA CLASSE TradingBot ---

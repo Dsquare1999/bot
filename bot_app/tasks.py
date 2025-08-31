@@ -1,6 +1,7 @@
 from celery import shared_task
 from bot_app.services.trading_logic import TradingBot # Assure-toi que le chemin est correct
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -8,6 +9,26 @@ logger = logging.getLogger(__name__)
 # Pour plusieurs workers, il faudrait une gestion d'état plus complexe (Redis, DB)
 # ou s'assurer qu'un seul worker exécute une instance de bot donnée à la fois.
 current_bot_instance = None 
+
+@shared_task(name="bot_app.tasks.debug_hello_task")
+def debug_hello_task(message):
+    # Cette tâche est conçue pour n'avoir aucune dépendance complexe.
+    log_file_path_debug = "/app/debug_celery.log" # On écrit dans un fichier séparé pour être sûr
+    
+    try:
+        logger.warning("🎉🎉🎉 DEBUG TASK FIRST TEST! Message: %s 🎉🎉🎉", message)
+
+        with open(log_file_path_debug, "a") as f:
+            f.write(f"[{time.ctime()}] HELLO FROM CELERY! Message: {message}\n")
+        
+        logger.warning("🎉🎉🎉 DEBUG TASK EXECUTED! Message: %s 🎉🎉🎉", message)
+        
+        return f"Successfully executed with message: {message}"
+    except Exception as e:
+        # Si même ça échoue, c'est un problème de permissions d'écriture
+        with open(log_file_path_debug, "a") as f:
+            f.write(f"[{time.ctime()}] FAILED TO EXECUTE DEBUG TASK. Error: {e}\n")
+        raise
 
 @shared_task(bind=True, name='bot_app.tasks.start_trading_bot_task')
 def start_trading_bot_task(self, cookies_path="Trading_cookies.json", config_override=None):
@@ -22,6 +43,8 @@ def start_trading_bot_task(self, cookies_path="Trading_cookies.json", config_ove
         # Charger la config depuis Django settings ou un fichier de config
         # Pour l'instant, on utilise config_override ou les défauts de la classe.
         bot_config = config_override if config_override else None 
+
+        logger.info("🏁 Start Tâche Celery 'start_trading_bot_task' va commencer (le bot va démarré).")
         
         current_bot_instance = TradingBot(cookies_path=cookies_path, config=bot_config)
         current_bot_instance.start() # Ceci est bloquant, donc la tâche Celery va tourner tant que le bot tourne.

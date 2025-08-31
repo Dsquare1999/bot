@@ -12,6 +12,11 @@ app = Celery('trading_bot')
 #   doivent avoir un préfixe `CELERY_`.
 app.config_from_object('django.conf:settings', namespace='CELERY')
 
+redis_url = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379')
+app.conf.broker_url = redis_url
+app.conf.result_backend = os.getenv('CELERY_RESULT_BACKEND', redis_url)
+
+
 # Charger les modules de tâches de toutes les apps Django enregistrées.
 app.autodiscover_tasks()
 

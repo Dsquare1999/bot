@@ -171,7 +171,7 @@ AUTH_PASSWORD_VALIDATORS = [
 # CELERY SETTINGS (exemple avec Redis)
 # CELERY_BROKER_URL = 'redis://redis:6379/0' # 'redis' est le nom du service dans docker-compose
 # CELERY_RESULT_BACKEND = 'redis://redis:6379/0'
-CELERY_BROKER_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
+CELERY_BROKER_URL = os.environ.get('REDIS_URL', 'redis://redis:6379/0')
 CELERY_RESULT_BACKEND = CELERY_BROKER_URL
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
