@@ -53,7 +53,7 @@ class TradingBot:
         self.active_bet_details = None # Infos sur le pari en cours
         self.trade_history_log = []
         self.is_trade_active_now = False # Si une condition de trade est rencontrée
-        self.trading_offset_candles = self.config.get("OFFSET_CANDLES", 2) # Nombre de bougies identiques pour trader
+        self.trading_offset_candles = self.config.get("OFFSET_CANDLES", 3) # Nombre de bougies identiques pour trader
         
         self.timezone = pytz.timezone(self.config.get("TIMEZONE", 'Etc/GMT-2'))
         self.current_candle_start_time = None
@@ -882,6 +882,8 @@ class TradingBot:
                                 
                                 logger.debug("Candle ticks:\n%s", candle_ticks)
 
+                                # Afficher les informations de la bougie
+                                # Mettre en place une analyse sur l'information qu'il reçoit
                                 if not candle_ticks.empty:
                                     open_price = candle_ticks['Price'].iloc[0]
                                     high_price = candle_ticks['Price'].max()
@@ -890,7 +892,7 @@ class TradingBot:
                                     candle_color = self._get_candle_color(open_price, close_price)
                                     
                                     new_ohlc_row = pd.DataFrame({
-                                        "Open": [open_price], "High": [high_price], 
+                                        "Open": [open_price], "High": [high_price],
                                         "Low": [low_price], "Close": [close_price], 
                                         "Color": [candle_color], "Timestamp": [self.current_candle_start_time] # Heure d'ouverture de la bougie
                                     })
@@ -902,7 +904,8 @@ class TradingBot:
                                     # logger.debug("OHLC Data:\n%s", self.ohlc_data.tail())
 
                                     # Appliquer la logique de trading
-                                    self._apply_trade_logic(candle_color)
+                                    logger.info(" ====>  Couleur de la bougie: %s", candle_color)
+                                    self._apply_trade_logic(candle_color) # C'est ici que l'information entre en action
 
                                 else:
                                     logger.warning("⚠️ Aucune donnée de tick pour la bougie de %s à %s.", 
